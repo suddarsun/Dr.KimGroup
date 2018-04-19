@@ -1,5 +1,5 @@
 /*
-
+MULTI THREADING WAS ADDED ON APRIL 19th
 Description:
   Program to compensate the movements of a Drosophila melanogaster walking on
   the Active Omni-directional Treadmill (AOT). This program uses OpenCV Library
