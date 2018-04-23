@@ -1,5 +1,5 @@
 /*
-MULTI THREADING WAS ADDED ON APRIL 19th, 2018 @ 4:57 PM
+MULTI THREADING WAS ADDED ON APRIL 19th
 Description:
   Program to compensate the movements of a Drosophila melanogaster walking on
   the Active Omni-directional Treadmill (AOT). This program uses OpenCV Library
@@ -77,6 +77,7 @@ Written by:
 
 #define TORQUE_ENABLE                   1
 #define TORQUE_DISABLE                  0
+#define datasave_variable_count         14
 
 #define ESC_ASCII_VALUE                 0x1b
 
@@ -147,7 +148,7 @@ double ang_vel = 0.0;
 double target_location[3] = {320.0, 188.0, 0.0};
 double thm = 20*3.141592/180; // IN RADIANS
 double csth_thm[2] = {cos(thm), sin(thm)}; // COMPENSATION FOR CAMERA AXIS
-
+double DATA_WRITE[14];
 
 Mat src; Mat src_gray;
 int threshold_value = 125;
@@ -182,7 +183,7 @@ dynamixel::GroupSyncRead groupSyncRead(portHandler, packetHandler, ADDR_PRO_PRES
 
 // TO SAVE THE DATA
  ofstream OutFile, OutFile_Data;
- int64_t OutFile_Data_size_byte = 17*sizeof(double); // 13 numbers will be save per image (you may change)
+ int64_t OutFile_Data_size_byte = datasave_variable_count*sizeof(double); // 13 numbers will be save per image (you may change)
 
 // OPENING THE FILES TO WRITE DATA
 void save_init(){
@@ -438,11 +439,11 @@ void motor_deinit()
 }
 
 static const std::string OPENCV_WINDOW = "Image window";
-
+enum{s_seq, s_elapt, s_sampt, s_cx, s_cy, s_th, s_dxm, s_dym, s_dthm, s_omg1, s_omg2, s_omg3, s_maxa, s_sec};
 struct AOTResult
 {
   uint8_t * ptr;
-  double a;
+  double data[datasave_variable_count];
 };
 
 // MULTITHREADING
@@ -674,10 +675,32 @@ public:
     //double secs = ros::Time::now().toSec();
     //double output_data[] = {seq_init, elapsed_secs, (double)samplingtime_secs, _cx, _cy, _theta, dxm, dym, dthm, omega_1, omega_2, omega_3, maxArea, (double)dxl1_present_position, (double)dxl2_present_position, (double)dxl3_present_position, secs}; // 13 variables
     //OutFile_Data.write((char *)output_data, OutFile_Data_size_byte);
+    auto end = Clock::now();
+
+    double elapsed_secs = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() ;
+
+    double secs = ros::Time::now().toSec();
+
+    AOTResult current_result;
+
+    current_result.ptr = (uint8_t *)im.data;
+    current_result.data[s_seq] = seq_init;
+    current_result.data[s_elapt] = elapsed_secs;
+    current_result.data[s_sampt] = (double)samplingtime_secs;
+    current_result.data[s_cx] = _cx;
+    current_result.data[s_cy] = _cx;
+    current_result.data[s_th] = _theta;
+    current_result.data[s_dxm] = dxm;
+    current_result.data[s_dym] = dym;
+    current_result.data[s_dthm] = dthm;
+    current_result.data[s_omg1] = omega_1;
+    current_result.data[s_omg2] = omega_2;
+    current_result.data[s_omg3] = omega_3;
+    current_result.data[s_maxa] = maxArea;
+    current_result.data[s_sec] = secs;
+
 
     lastResult.ptr = (uint8_t *)im.data;
-    auto end = Clock::now();
-    double elapsed_secs = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() ;
     ROS_INFO ("%0.3f,%0.3f, %lu", (double)elapsed_secs/1000,(double)samplingtime_secs/1000, std::this_thread::get_id());
 
   }
@@ -699,13 +722,18 @@ void thread_save()
 {
   save_init();  // OPENING FILES
  while((g_bProcessRunning) || (result_save.size() > 0)) {
-   if (result_save.size() > 0) {
+   if (result_save.size() > 1) {
      // saving data in result_save[0]
      // delete the saved data
+     AOTResult obj = result_save[0];
+     //Writing Image AND data to Binary File
+     OutFile.write((char *)lastResult.ptr, width*height*sizeof(uchar));
+     OutFile_Data.write((char *)lastResult.data, OutFile_Data_size_byte);
      result_save.erase(result_save.begin());
    }
    sleep(0.005);
  }
+ save_deinit();
  ROS_ERROR( "save Thread shutted down[ID:%lu]", std::this_thread::get_id());
 }
 
