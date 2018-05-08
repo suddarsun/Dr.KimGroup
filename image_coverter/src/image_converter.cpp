@@ -67,9 +67,9 @@ Written by:
 #define PROTOCOL_VERSION                2.0
 
 // Default setting
-#define DXL1_ID                         101
-#define DXL2_ID                         100
-#define DXL3_ID                         102
+#define DXL1_ID                         102
+#define DXL2_ID                         101
+#define DXL3_ID                         100
 
 #define BAUDRATE                        1000000
 #define DEVICENAME                      "/dev/ttyUSB0"
@@ -77,7 +77,7 @@ Written by:
 
 #define TORQUE_ENABLE                   1
 #define TORQUE_DISABLE                  0
-#define datasave_variable_count         14
+#define datasave_variable_count         17
 
 #define ESC_ASCII_VALUE                 0x1b
 
@@ -439,7 +439,7 @@ void motor_deinit()
 }
 
 static const std::string OPENCV_WINDOW = "Image window";
-enum{s_seq, s_elapt, s_sampt, s_cx, s_cy, s_th, s_dxm, s_dym, s_dthm, s_omg1, s_omg2, s_omg3, s_maxa, s_sec};
+enum{s_seq, s_elapt, s_sampt, s_cx, s_cy, s_th, s_dxm, s_dym, s_dthm, s_omg1, s_omg2, s_omg3, s_maxa, s_sec, s_dxl1, s_dxl2, s_dxl3};
 struct AOTResult
 {
   uint8_t * ptr;
@@ -498,8 +498,39 @@ public:
     cv_bridge::CvImagePtr cv_ptr;
 
     std_msgs::Header h = msg->header; //TO GET FRAME NUMBER
+    auto begin = Clock::now();
+
+    dxl_comm_result = groupSyncRead.txRxPacket();
+    if (dxl_comm_result != COMM_SUCCESS) ROS_ERROR("%s\n", packetHandler->getTxRxResult(dxl_comm_result));
+
+    // Check if groupsyncread data of Dynamixel#1 is available
+    dxl_getdata_result = groupSyncRead.isAvailable(DXL1_ID, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
+    if (dxl_getdata_result != true)
+    {
+      ROS_ERROR( "[ID:%d] groupSyncRead getdata failed", DXL1_ID);
+    }
+
+    // Check if groupsyncread data of Dynamixel#2 is available
+    dxl_getdata_result = groupSyncRead.isAvailable(DXL2_ID, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
+    if (dxl_getdata_result != true)
+    {
+      ROS_ERROR( "[ID:%d] groupSyncRead getdata failed", DXL2_ID);
+    }
+
+    dxl_getdata_result = groupSyncRead.isAvailable(DXL3_ID, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
+    if (dxl_getdata_result != true)
+    {
+      ROS_ERROR( "[ID:%d] groupSyncRead getdata failed", DXL3_ID);
+    }
+
+    // Get Dynamixel#1 present position value
+    dxl1_present_position = groupSyncRead.getData(DXL1_ID, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
+
+    // Get Dynamixel#2 present position value
+    dxl2_present_position = groupSyncRead.getData(DXL2_ID, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
 
 
+    dxl3_present_position = groupSyncRead.getData(DXL3_ID, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
     // time start
 
     try
@@ -516,7 +547,6 @@ public:
     }
 
 
-    auto begin = Clock::now();
 
     auto samplingtime_secs =  std::chrono::duration_cast<std::chrono::microseconds>(begin - prev_clock).count() ; //LOOP TIME
     prev_clock = begin;
@@ -630,37 +660,7 @@ public:
 
   // READING CURRENT POSITION OF THE MOTOR AFTER COMPENSATION
 /*
-     dxl_comm_result = groupSyncRead.txRxPacket();
-     if (dxl_comm_result != COMM_SUCCESS) ROS_ERROR("%s\n", packetHandler->getTxRxResult(dxl_comm_result));
 
-     // Check if groupsyncread data of Dynamixel#1 is available
-     dxl_getdata_result = groupSyncRead.isAvailable(DXL1_ID, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
-     if (dxl_getdata_result != true)
-     {
-       ROS_ERROR( "[ID:%d] groupSyncRead getdata failed", DXL1_ID);
-     }
-
-     // Check if groupsyncread data of Dynamixel#2 is available
-     dxl_getdata_result = groupSyncRead.isAvailable(DXL2_ID, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
-     if (dxl_getdata_result != true)
-     {
-       ROS_ERROR( "[ID:%d] groupSyncRead getdata failed", DXL2_ID);
-     }
-
-     dxl_getdata_result = groupSyncRead.isAvailable(DXL3_ID, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
-     if (dxl_getdata_result != true)
-     {
-       ROS_ERROR( "[ID:%d] groupSyncRead getdata failed", DXL3_ID);
-     }
-
-     // Get Dynamixel#1 present position value
-     dxl1_present_position = groupSyncRead.getData(DXL1_ID, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
-
-     // Get Dynamixel#2 present position value
-     dxl2_present_position = groupSyncRead.getData(DXL2_ID, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
-
-
-     dxl3_present_position = groupSyncRead.getData(DXL3_ID, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
 
 
 */
@@ -698,10 +698,14 @@ public:
     current_result.data[s_omg3] = omega_3;
     current_result.data[s_maxa] = maxArea;
     current_result.data[s_sec] = secs;
+    current_result.data[s_dxl1] = dxl1_present_position;
+    current_result.data[s_dxl2] = dxl2_present_position;
+    current_result.data[s_dxl3] = dxl3_present_position;
 
+    result_save.push_back(current_result);
 
     lastResult.ptr = (uint8_t *)im.data;
-    ROS_INFO ("%0.3f,%0.3f, %lu", (double)elapsed_secs/1000,(double)samplingtime_secs/1000, std::this_thread::get_id());
+    ROS_INFO ("%0.3f,%0.3f, %lu, %d", elapsed_secs/1000,(double)samplingtime_secs/1000, std::this_thread::get_id(), result_save.size());
 
   }
 };
@@ -710,31 +714,38 @@ void thread_proc()
 {
   motor_init(); // INITIALIZING MOTORS
   ImageConverter ic;
-  //ros::MultiThreadedSpinner spinner(1);
-  //spinner.spin();
-  ros::spin();
+  ros::MultiThreadedSpinner spinner(3);
+  spinner.spin();
+  //ros::spin();
   motor_deinit(); // DEINITIALIZING MOTORS
-  save_deinit();  // CLOSING FILES
+  //save_deinit();  // CLOSING FILES
   ROS_ERROR( "proc Thread[ID:%lu]", std::this_thread::get_id());
 }
 
 void thread_save()
 {
+  ROS_ERROR( "save thread init [ID:%lu]", std::this_thread::get_id());
   save_init();  // OPENING FILES
- while((g_bProcessRunning) || (result_save.size() > 0)) {
-   if (result_save.size() > 1) {
+ while(g_bProcessRunning) {
+   if (result_save.size() > 1) {  auto begin_save = Clock::now();
+
      // saving data in result_save[0]
      // delete the saved data
      AOTResult obj = result_save[0];
      //Writing Image AND data to Binary File
-     OutFile.write((char *)lastResult.ptr, width*height*sizeof(uchar));
-     OutFile_Data.write((char *)lastResult.data, OutFile_Data_size_byte);
+     OutFile.write((char *)obj.ptr, width*height);
+     OutFile_Data.write((char *)obj.data, OutFile_Data_size_byte);
      result_save.erase(result_save.begin());
+     auto end_save = Clock::now();
+     double save_time = std::chrono::duration_cast<std::chrono::microseconds>(end_save - begin_save).count() ;
+    // ROS_INFO("Savetime = %0.3f", save_time);
+
    }
    sleep(0.005);
  }
  save_deinit();
- ROS_ERROR( "save Thread shutted down[ID:%lu]", std::this_thread::get_id());
+
+ ROS_ERROR( "save thread is shutting down[ID:%lu]", std::this_thread::get_id());
 }
 
 
