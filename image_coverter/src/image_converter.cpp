@@ -11,36 +11,36 @@ Written by:
 */
 
 
-// HEADER FILES INCLUSION
-
+// HEADER FILES FOR ROS
 #include <ros/ros.h>
-#include <image_transport/image_transport.h>
-#include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/image_encodings.h>
+#include <image_transport/image_transport.h>
+#include <geometry_msgs/Twist.h>
+#include <image_coverter/position.h>
+
+// HEADER FILES FOR OpenCV
+#include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 #include "opencv2/core/core.hpp"
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
-#include <image_coverter/position.h>
-#include <geometry_msgs/Twist.h>
-#include <fstream>
-#include <chrono>
-#include <thread>
-#if defined(__linux__) || defined(__APPLE__)
-#include <fcntl.h>
-#include <termios.h>
-#define STDIN_FILENO 0
-#elif defined(_WIN32) || defined(_WIN64)
-#include <conio.h>
-#endif
+using namespace cv;
+using namespace std;
 
+
+// HEADER FILES FOR OTHERS
+#include <fstream> // FILE OPERATIONS
+#include <chrono>  // CLOCK
+#include <thread>  // MULTITHREADING
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
+typedef std::chrono::high_resolution_clock Clock;
+auto prev_clock = Clock::now();
 
 
 
-// FOR DYNAMIXEL MOTORS TO BE USED IN CONJUNCTION WITH DYNAMIXEL DynamixelSDK
+// FOR DYNAMIXEL MOTORS TO BE USED IN CONJUNCTION WITH DynamixelSDK
 
 #if defined(__linux__) || defined(__APPLE__)
 #include <fcntl.h>
@@ -49,38 +49,7 @@ Written by:
 #elif defined(_WIN32) || defined(_WIN64)
 #include <conio.h>
 #endif
-
-#include <stdlib.h>
-#include <stdio.h>
 #include "DynamixelSDK.h"
-
-// Control table address
-#define ADDR_PRO_TORQUE_ENABLE          64
-#define ADDR_PRO_GOAL_VELOCITY          104
-#define ADDR_PRO_PRESENT_POSITION       132
-
-// Data Byte Length
-#define LEN_PRO_GOAL_VELOCITY           4
-#define LEN_PRO_PRESENT_POSITION        4
-
-// Protocol version
-#define PROTOCOL_VERSION                2.0
-
-// Default setting
-#define DXL1_ID                         102
-#define DXL2_ID                         101
-#define DXL3_ID                         100
-
-#define BAUDRATE                        1000000
-#define DEVICENAME                      "/dev/ttyUSB0"
-
-
-#define TORQUE_ENABLE                   1
-#define TORQUE_DISABLE                  0
-#define datasave_variable_count         17
-
-#define ESC_ASCII_VALUE                 0x1b
-
 int getch()
 {
 #if defined(__linux__) || defined(__APPLE__)
@@ -129,31 +98,57 @@ int kbhit(void)
 #endif
 }
 
-using namespace cv;
-using namespace std;
-typedef std::chrono::high_resolution_clock Clock;
-auto prev_clock = Clock::now();
-// DECLARATION OF GLOBAL VARIABLES TO COMPUTE OMEGA 1, 2, AND 3
+// CONTROL TABLE ADDRESS FOR DIFFERENT DYNAMIXEL FUNCTIONS/OPERATIONS
 
+#define ADDR_PRO_TORQUE_ENABLE          64    // ENABLING TORQUE
+#define ADDR_PRO_GOAL_VELOCITY          104   // GOAL VELOCITY
+#define ADDR_PRO_PRESENT_POSITION       132   // GETTING PRESENT POSITION
+
+// Data Byte Length
+#define LEN_PRO_GOAL_VELOCITY           4     // LENGTH OF GOAL VELOCITY IN BYTES
+#define LEN_PRO_PRESENT_POSITION        4     // LENGTH OF PRESENT POSITION IN BYTES
+
+// Protocol version
+#define PROTOCOL_VERSION                2.0
+
+// IDS OF THE THREE DYNAMIXEL MOTORS -  Can be changed to calibrate the system
+
+#define DXL1_ID                         102
+#define DXL2_ID                         101
+#define DXL3_ID                         100
+#define TORQUE_ENABLE                   1
+#define TORQUE_DISABLE                  0
+
+#define BAUDRATE                        1000000        // If motors are changed, check if this baud rate is the same for the new motors
+#define DEVICENAME                      "/dev/ttyUSB0" // Can be checked if this device is present by using the "ls /dev/ttyUSB0" command in the terminal
+
+
+
+#define datasave_variable_count         17       /* These are the variable count that's being written to the binary file:
+                                                  sequence number (frame number), elapsed time, sampling time, centroid x, centroid y,
+                                                  centroid theta, dxm, dym, dthm, omega_1, omega_2, omega_3, maxArea, time in seconds,
+                                                  dynamixel 1 present position, dynamixel 2 present position, dynamixel 3 present position */
+
+
+#define ESC_ASCII_VALUE                 0x1b
+
+
+// DECLARATION OF GLOBAL VARIABLES TO COMPUTE OMEGA 1, 2, AND 3
 double theta = 0.0;
 double J1M[9] = {0.0,0.000408326,-0.00856566,-0.000353621,-0.000204163,-0.00856566,0.000353621,-0.000204163,-0.00856566}; // J inverse * M
 double omega_1 = 0.0; // ANGULAR VELOCITY FOR MOTOR 1 IN AOT
 double omega_2 = 0.0; // ANGULAR VELOCITY FOR MOTOR 2 IN AOT
 double omega_3 = 0.0; // ANGULAR VELOCITY FOR MOTOR 3 IN AOT
-double K = 100.0;
+double K = 100.0; // GAIN USED FOR THE MOTORS
 double SF = 60.0;
 double prev_dth = 0.0;
 double lin_vel =0.0;
 double ang_vel = 0.0;
 double target_location[3] = {320.0, 188.0, 0.0};
-double thm = 20*3.141592/180; // IN RADIANS
+double thm = 20*3.141592/180; // IN RADIANS - COMPENSATION FOR CAMERA AXIS
 double csth_thm[2] = {cos(thm), sin(thm)}; // COMPENSATION FOR CAMERA AXIS
-double DATA_WRITE[14];
 
-Mat src; Mat src_gray;
-int threshold_value = 125;
-int const max_BINARY_value = 255;
-int threshold_type = 0;
+Mat src; Mat src_gray;  // MATRIX TO STORE IMAGES CAPTURED
 RNG rng(12345);
 int repeat_time = 20;
 int width = 640;  // IMAGE WIDTH
@@ -161,41 +156,30 @@ int height = 376; // IMAGE HEIGHT
 
 // FOR DYNAMIXEL MOTORS TO BE USED IN CONJUNCTION WITH DYNAMIXEL DynamixelSDK
 
-dynamixel::PortHandler *portHandler = dynamixel::PortHandler::getPortHandler(DEVICENAME);
-dynamixel::PacketHandler *packetHandler = dynamixel::PacketHandler::getPacketHandler(PROTOCOL_VERSION);
-dynamixel::GroupSyncWrite groupSyncWrite(portHandler, packetHandler, ADDR_PRO_GOAL_VELOCITY, LEN_PRO_GOAL_VELOCITY);
-dynamixel::GroupSyncRead groupSyncRead(portHandler, packetHandler, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION);
- int dxl_comm_result = COMM_TX_FAIL;               // Communication result
+dynamixel::PortHandler *portHandler = dynamixel::PortHandler::getPortHandler(DEVICENAME); // PORT HANDLER TO PERFORM OPERATIONS ON MOTORS THRU USB PORT
+dynamixel::PacketHandler *packetHandler = dynamixel::PacketHandler::getPacketHandler(PROTOCOL_VERSION); // TO READ AND WRITE DATA PACKETS TO AND FROM MOTORS
+dynamixel::GroupSyncWrite groupSyncWrite(portHandler, packetHandler, ADDR_PRO_GOAL_VELOCITY, LEN_PRO_GOAL_VELOCITY); // USED TO WRITE THE VELOCITY OF TO THE MOTORS
+dynamixel::GroupSyncRead groupSyncRead(portHandler, packetHandler, ADDR_PRO_PRESENT_POSITION, LEN_PRO_PRESENT_POSITION); // USED TO READ THE POSITION OF THE MOTORS
+ int dxl_comm_result = COMM_TX_FAIL;               // Communication result when the system communicates with the motors, set to false by default. If false, no other operation is done and program is terminated
  bool dxl_addparam_result = false;                 // addParam result
  bool dxl_getdata_result = false;                  // GetParam result
  uint8_t dxl_error = 0;                            // Dynamixel error
- uint8_t param_goal_position[4];
- int32_t dxl1_present_position = 0, dxl2_present_position = 0, dxl3_present_position = 0;
-
-
-
-
-
-
-
-
+ int32_t dxl1_present_position = 0, dxl2_present_position = 0, dxl3_present_position = 0; // To obtain the positions of the three motors
 
 
 // TO SAVE THE DATA
  ofstream OutFile, OutFile_Data;
  int64_t OutFile_Data_size_byte = datasave_variable_count*sizeof(double); // 13 numbers will be save per image (you may change)
 
-// OPENING THE FILES TO WRITE DATA
+// Function to initialize the binary files in which the data will be recorded
 void save_init(){
 
-//  my_file_name = "Fly_Image_Mar_28.bin"
   OutFile.open("Fly_Image_Mar_28.bin", ios::out | ios::binary);
   OutFile_Data.open("Fly_Data_Mar_28.bin", ios::out | ios::binary);
-  //OutFile_Data.write((char *)OutFile_Data_size_byte , sizeof(OutFile_Data_size_byte));
 
 }
 
-// CLOSING THE BINARY FILES AFTER DATA IS WRITTEN
+// Function to flush and close the binary files in which the data will be recorded
 
 void save_deinit(){
 OutFile.close();
@@ -204,7 +188,7 @@ OutFile_Data.close();
 }
 
 
-// INITIALIZING THE MOTORS
+// INITIALIZING THE MOTORS - In this funtion, the USB port is opened, the BaudRate is set and a connection to the motors is made. The torque of the motors are also enabled
 
 void motor_init(){
 
@@ -347,6 +331,9 @@ dxl_addparam_result = groupSyncRead.addParam(DXL1_ID);
 
 void Motor_Assign(double v1, double v2, double v3)
 {
+  // Length of the goal velocity variable is 4 bytes.
+  // DXL_HIWORD GETS THE HIGHER TWO BYTES OF THE 4 BYTE DATA AND SO ON
+  
   uint8_t param_vel_position[4];
   param_vel_position[0] = DXL_LOBYTE(DXL_LOWORD((int)v1));
   param_vel_position[1] = DXL_HIBYTE(DXL_LOWORD((int)v1));
