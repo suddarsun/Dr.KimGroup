@@ -103,6 +103,9 @@ int kbhit(void)
 #define ADDR_PRO_TORQUE_ENABLE          64    // ENABLING TORQUE
 #define ADDR_PRO_GOAL_VELOCITY          104   // GOAL VELOCITY
 #define ADDR_PRO_PRESENT_POSITION       132   // GETTING PRESENT POSITION
+#define ADDR_FOR_OPERATING_MODE         11    // USED FOR OPERATING MODE
+#define VELOCITY_MODE                   1     // VELOCITY MODE
+#define POSITION_MODE                   3     // POSITION MODE
 
 // Data Byte Length
 #define LEN_PRO_GOAL_VELOCITY           4     // LENGTH OF GOAL VELOCITY IN BYTES
@@ -141,7 +144,6 @@ double omega_2 = 0.0; // ANGULAR VELOCITY FOR MOTOR 2 IN AOT
 double omega_3 = 0.0; // ANGULAR VELOCITY FOR MOTOR 3 IN AOT
 double K = 100.0; // GAIN USED FOR THE MOTORS
 double SF = 60.0;
-double prev_dth = 0.0;
 double lin_vel =0.0;
 double ang_vel = 0.0;
 double target_location[3] = {320.0, 188.0, 0.0};
@@ -153,6 +155,7 @@ RNG rng(12345);
 int repeat_time = 20;
 int width = 640;  // IMAGE WIDTH
 int height = 376; // IMAGE HEIGHT
+static const std::string OPENCV_WINDOW = "Image window"; // CREATING A WINDOW TO DISPLAY THE IMAGE
 
 // FOR DYNAMIXEL MOTORS TO BE USED IN CONJUNCTION WITH DYNAMIXEL DynamixelSDK
 
@@ -170,12 +173,20 @@ dynamixel::GroupSyncRead groupSyncRead(portHandler, packetHandler, ADDR_PRO_PRES
 // TO SAVE THE DATA
  ofstream OutFile, OutFile_Data;
  int64_t OutFile_Data_size_byte = datasave_variable_count*sizeof(double); // 13 numbers will be save per image (you may change)
+ enum{s_seq, s_elapt, s_sampt, s_cx, s_cy, s_th, s_dxm, s_dym, s_dthm, s_omg1, s_omg2, s_omg3, s_maxa, s_sec, s_dxl1, s_dxl2, s_dxl3}; // ENUMERATING THE VARIABLES THAT NEED TO PUSHED INTO A VECTOR
+ struct AOTResult
+ {
+   uint8_t * ptr;
+   double data[datasave_variable_count];
+ };
+
+
 
 // Function to initialize the binary files in which the data will be recorded
 void save_init(){
 
-  OutFile.open("Fly_Image_Mar_28.bin", ios::out | ios::binary);
-  OutFile_Data.open("Fly_Data_Mar_28.bin", ios::out | ios::binary);
+  OutFile.open("Fly_Image_May17_2018_150PM.bin", ios::out | ios::binary);
+  OutFile_Data.open("Fly_Data_May17_2018_150PM.bin", ios::out | ios::binary);
 
 }
 
@@ -184,11 +195,11 @@ void save_init(){
 void save_deinit(){
 OutFile.close();
 OutFile_Data.close();
-
 }
 
 
-// INITIALIZING THE MOTORS - In this funtion, the USB port is opened, the BaudRate is set and a connection to the motors is made. The torque of the motors are also enabled
+// INITIALIZING THE MOTORS - In this funtion, the USB port is opened, the BaudRate is set and a connection to the motors is established. The torque of the motors are also enabled and the operating mode is set
+
 
 void motor_init(){
 
@@ -214,6 +225,9 @@ else
  ROS_ERROR("Press any key to terminate...\n");
  getch();
 }
+
+// The Torque of the motors need to be disabled first to set the operating mode
+
 dxl_comm_result = packetHandler->write1ByteTxRx(portHandler, DXL1_ID, ADDR_PRO_TORQUE_ENABLE, 0, &dxl_error);
 if (dxl_comm_result != COMM_SUCCESS)
 {
@@ -258,9 +272,16 @@ else
  printf("Dynamixel#%d has been successfully connected \n", DXL3_ID);
 }
 
-dxl_comm_result = packetHandler->write1ByteTxRx(portHandler, DXL1_ID, 11, 1, &dxl_error);
-dxl_comm_result = packetHandler->write1ByteTxRx(portHandler, DXL2_ID, 11, 1, &dxl_error);
-dxl_comm_result = packetHandler->write1ByteTxRx(portHandler, DXL3_ID, 11, 1, &dxl_error);
+
+// Next three lines are the commands to set the motor operating mode to velocity mode
+// Address for Operating Mode = 11 , Velocity Mode value = 1
+
+dxl_comm_result = packetHandler->write1ByteTxRx(portHandler, DXL1_ID, ADDR_FOR_OPERATING_MODE, VELOCITY_MODE, &dxl_error);
+dxl_comm_result = packetHandler->write1ByteTxRx(portHandler, DXL2_ID, ADDR_FOR_OPERATING_MODE, VELOCITY_MODE, &dxl_error);
+dxl_comm_result = packetHandler->write1ByteTxRx(portHandler, DXL3_ID, ADDR_FOR_OPERATING_MODE, VELOCITY_MODE, &dxl_error);
+
+
+// Enabling torque post operating mode assignment
 
 dxl_comm_result = packetHandler->write1ByteTxRx(portHandler, DXL1_ID, ADDR_PRO_TORQUE_ENABLE, 1, &dxl_error);
 if (dxl_comm_result != COMM_SUCCESS)
@@ -333,7 +354,7 @@ void Motor_Assign(double v1, double v2, double v3)
 {
   // Length of the goal velocity variable is 4 bytes.
   // DXL_HIWORD GETS THE HIGHER TWO BYTES OF THE 4 BYTE DATA AND SO ON
-  
+
   uint8_t param_vel_position[4];
   param_vel_position[0] = DXL_LOBYTE(DXL_LOWORD((int)v1));
   param_vel_position[1] = DXL_HIBYTE(DXL_LOWORD((int)v1));
@@ -425,13 +446,7 @@ void motor_deinit()
 
 }
 
-static const std::string OPENCV_WINDOW = "Image window";
-enum{s_seq, s_elapt, s_sampt, s_cx, s_cy, s_th, s_dxm, s_dym, s_dthm, s_omg1, s_omg2, s_omg3, s_maxa, s_sec, s_dxl1, s_dxl2, s_dxl3};
-struct AOTResult
-{
-  uint8_t * ptr;
-  double data[datasave_variable_count];
-};
+
 
 // MULTITHREADING
 bool g_bProcessRunning; // may set in the class, so you can set this true when constructor, and set this false in destructor
@@ -449,10 +464,6 @@ class ImageConverter
   image_transport::Publisher image_pub_;
   ros::Publisher Fly_Pos;
   ros::Subscriber seq_sub;
-
-
-
-
 
 
 public:
@@ -675,7 +686,7 @@ public:
     current_result.data[s_elapt] = elapsed_secs;
     current_result.data[s_sampt] = (double)samplingtime_secs;
     current_result.data[s_cx] = _cx;
-    current_result.data[s_cy] = _cx;
+    current_result.data[s_cy] = _cy;
     current_result.data[s_th] = _theta;
     current_result.data[s_dxm] = dxm;
     current_result.data[s_dym] = dym;
